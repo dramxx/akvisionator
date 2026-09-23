@@ -2,24 +2,31 @@ use crate::game::Rng;
 use crate::render::{Framebuffer, Rgb, hex};
 use crate::sprites::{STAR, STAR_DIM};
 
+/// How far the sky gradient scrolls vertically, relative to the camera.
+const SKY_PARALLAX: f32 = 0.3;
+
 struct Layer {
     w: usize,
+    h: usize,
     px: Vec<Option<Rgb>>,
     parallax: f32,
 }
 
-/// Sky gradient + stars + two skyline layers, precomputed once per level width.
+/// Sky gradient + stars + two skyline layers, precomputed once per level size.
+/// Each layer is larger than the view by the level's extra size times its parallax factor,
+/// so it scrolls on both axes and stays anchored to the bottom of the level.
 pub struct Background {
     sky: Vec<Rgb>,
     layers: Vec<Layer>,
 }
 
 impl Background {
-    pub fn new(level_w: usize, view_w: usize, view_h: usize) -> Self {
+    pub fn new(level_w: usize, level_h: usize, view_w: usize, view_h: usize) -> Self {
+        let sky_h = view_h + (level_h.saturating_sub(view_h) as f32 * SKY_PARALLAX).ceil() as usize;
         let stops = [(0.0, hex(0x090b1f)), (0.55, hex(0x261a44)), (1.0, hex(0x5a2a4e))];
-        let sky = (0..view_h)
+        let sky = (0..sky_h)
             .map(|y| {
-                let t = y as f32 / (view_h - 1) as f32;
+                let t = y as f32 / (sky_h - 1) as f32;
                 let i = if t <= stops[1].0 { 0 } else { 1 };
                 let (a, b) = (stops[i].1, stops[i + 1].1);
                 let u = (t - stops[i].0) / (stops[i + 1].0 - stops[i].0);
@@ -30,10 +37,11 @@ impl Background {
 
         let mut rng = Rng::new(11);
         let width = |par: f32| (view_w as f32 + level_w.saturating_sub(view_w) as f32 * par).ceil() as usize + 2;
+        let height = |par: f32| view_h + (level_h.saturating_sub(view_h) as f32 * par).ceil() as usize;
 
         let skyline = |rng: &mut Rng, par, h_min, h_max, body, win, win_chance: f32| {
-            let w = width(par);
-            let mut px = vec![None; w * view_h];
+            let (w, lh) = (width(par), height(par));
+            let mut px = vec![None; w * lh];
             let mut x = 0;
             while x < w {
                 let bw = 5 + (rng.next() * 10.0) as usize;
@@ -41,36 +49,41 @@ impl Background {
                 for i in 0..bw.min(w - x) {
                     for ly in 0..h {
                         let lit = i % 3 == 1 && ly % 3 == 2 && i < bw - 1 && rng.next() < win_chance;
-                        px[(view_h - h + ly) * w + x + i] = Some(if lit { win } else { body });
+                        px[(lh - h + ly) * w + x + i] = Some(if lit { win } else { body });
                     }
                 }
                 x += bw + if rng.next() < 0.3 { 1 + (rng.next() * 3.0) as usize } else { 0 };
             }
-            Layer { w, px, parallax: par }
+            Layer { w, h: lh, px, parallax: par }
         };
         let near = skyline(&mut rng, 0.6, 12, 26, hex(0x140f26), hex(0xf2c14e), 0.12);
         let far = skyline(&mut rng, 0.35, 16, 40, hex(0x221a3d), hex(0x8a6a3a), 0.3);
 
-        let w = width(0.15);
-        let mut px = vec![None; w * view_h];
-        for _ in 0..w.div_ceil(2) {
+        let (w, lh) = (width(0.15), height(0.15));
+        let mut px = vec![None; w * lh];
+        for _ in 0..(w * lh / view_h).div_ceil(2) {
             let x = (rng.next() * w as f32) as usize;
-            let y = (rng.next() * 40.0) as usize;
+            let y = (rng.next() * (lh * 5 / 8) as f32) as usize;
             px[y * w + x] = Some(if rng.next() < 0.3 { STAR } else { STAR_DIM });
         }
-        let stars = Layer { w, px, parallax: 0.15 };
+        let stars = Layer { w, h: lh, px, parallax: 0.15 };
 
         Self { sky, layers: vec![near, far, stars] }
     }
 
-    pub fn draw(&self, fb: &mut Framebuffer, cam: i32) {
+    /// `cam` is the top-left of the view in level pixels.
+    pub fn draw(&self, fb: &mut Framebuffer, cam: (i32, i32)) {
+        let shift = |par: f32| ((cam.0 as f32 * par).round() as usize, (cam.1 as f32 * par).round() as usize);
+        let offs: Vec<_> = self.layers.iter().map(|l| shift(l.parallax)).collect();
+        let sky_off = shift(SKY_PARALLAX).1;
         for y in 0..fb.h {
             for x in 0..fb.w {
                 let c = self
                     .layers
                     .iter()
-                    .find_map(|l| l.px[y * l.w + x + (cam as f32 * l.parallax).round() as usize])
-                    .unwrap_or(self.sky[y]);
+                    .zip(&offs)
+                    .find_map(|(l, &(ox, oy))| l.px[(y + oy).min(l.h - 1) * l.w + x + ox])
+                    .unwrap_or(self.sky[(y + sky_off).min(self.sky.len() - 1)]);
                 fb.put(x as i32, y as i32, c);
             }
         }

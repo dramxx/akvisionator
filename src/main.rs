@@ -1,9 +1,15 @@
 mod background;
+mod camera;
+mod enemies;
+mod entities;
 mod game;
 mod input;
 mod level;
+mod physics;
+mod player;
 mod render;
 mod sprites;
+mod validator;
 
 use std::io::{self, Write, stdout};
 use std::thread;
@@ -56,9 +62,27 @@ impl Drop for Terminal {
     }
 }
 
+fn load(path: &str) -> io::Result<Level> {
+    Level::parse(&std::fs::read_to_string(path)?).map_err(|e| io::Error::other(format!("{path}: {e}")))
+}
+
 fn main() -> io::Result<()> {
-    let level = Level::parse("LEVEL 1-1  ROOFTOPS", include_str!("../levels/level1.txt"))
-        .map_err(|e| io::Error::other(format!("levels/level1.txt: {e}")))?;
+    // `akvisionator [level.txt]` plays a level file instead of the built-in level 1;
+    // `akvisionator --check level.txt` only validates it (exit code 1 if it cannot be finished).
+    let mut args = std::env::args().skip(1);
+    let level = match args.next().as_deref() {
+        Some("--check") => {
+            let path = args.next().ok_or_else(|| io::Error::other("usage: akvisionator --check <level.txt>"))?;
+            let report = validator::check(&load(&path)?);
+            report.info.iter().for_each(|i| println!("info: {i}"));
+            report.errors.iter().for_each(|e| println!("error: {e}"));
+            println!("{path}: {}", if report.is_ok() { "OK" } else { "FAILED" });
+            std::process::exit(if report.is_ok() { 0 } else { 1 });
+        }
+        Some(path) => load(path)?,
+        None => Level::parse(include_str!("../levels/level1.txt"))
+            .map_err(|e| io::Error::other(format!("levels/level1.txt: {e}")))?,
+    };
 
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {

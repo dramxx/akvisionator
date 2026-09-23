@@ -41,23 +41,33 @@ door, reach the exit. Diffing half-block renderer, fixed 60 Hz loop, held-key in
 background, player physics (variable jump, snap-to-tile collisions), bots, bullets, particles,
 pickups, HUD, death/restart, window scaling. 14 unit tests.
 
-Level format (P1): plain text, one char per tile.
+Level format: plain text, one char per tile. An optional `---` line after the grid starts the
+metadata: `name <text>`, `hint <col>,<row> <text>` (one per `?`), `link <col>,<row> <col>,<row>`
+(switch, then any tile of the gate). Columns and rows are 1-based; errors report line and column.
 
 | Char | Meaning |
 |---|---|
 | `.` | empty |
 | `#` | brick wall (solid) |
 | `=` | steel girder (solid) |
-| `D` | door, solid until the player has the key |
+| `R` `G` `B` `Y` | door (red, green, blue, yellow), solid until the hero has the key of that color |
+| `r` `g` `b` `y` | key of that color |
+| `S` | switch: touch it once, its linked gate opens |
+| `!` | gate, solid until its switch is pressed |
+| `%` | cracked wall: one shot breaks it (secret passages) |
+| `C` | crate: one shot breaks it, it drops a gem, health or a bomb |
+| `?` | hint globe: touching it shows its `hint` text in the hint row |
+| `s` | secret area trigger (invisible), counts once toward "secrets found" |
 | `X` | exit |
 | `P` | player start |
 | `E` | enemy (bot) spawn |
-| `k` | key |
 | `+` | health |
 | `*` | gem (+100 score) |
 
 Code layout: `main.rs` (terminal, loop), `render.rs` (framebuffer, half-block output, diffing,
-scaling), `input.rs`, `level.rs`, `game.rs`, `sprites.rs`, `background.rs`.
+scaling), `input.rs`, `level.rs`, `sprites.rs`, `background.rs`, `camera.rs`; since P2.2 the game is
+split into `game.rs` (loop, HUD, bullets), `physics.rs`, `player.rs`, `enemies.rs`, `entities.rs`.
+Pickups and bots are entities (`Kind::Bot`, `Kind::Pickup`); tiles are only the static grid.
 
 ---
 
@@ -68,14 +78,15 @@ scaling), `input.rs`, `level.rs`, `game.rs`, `sprites.rs`, `background.rs`.
 
 ### Steps
 
-1. **Big levels + two-axis camera**
+1. **Big levels + two-axis camera** ✅ done
    Levels of any size. Camera follows on both axes with a dead zone and a little look-ahead in
    the facing direction; clamps to level edges. Parallax background also scrolls vertically.
    Only visible tiles/entities are drawn; entities far off-screen are frozen.
    → verify: a 128 × 90 test level scrolls smoothly everywhere, fps unchanged vs. P1;
    camera never shows outside the level.
+   `levels/test/big.txt` (128 × 90 tower); play it with `cargo run --release -- levels/test/big.txt`.
 
-2. **Level format v2 + entity system**
+2. **Level format v2 + entity system** ✅ done (only `name` so far; `hint`/`link`/`teleport` arrive with their features in steps 4 and 7)
    File = tile grid, then a `---` line, then metadata lines:
    `name`, `music`/`theme` (later), `hint <x>,<y> <text>`, `link <switch> <target>`, `teleport <a> <b>`.
    Tiles stay a grid (static); everything that moves or can be picked up/destroyed becomes an
@@ -83,20 +94,30 @@ scaling), `input.rs`, `level.rs`, `game.rs`, `sprites.rs`, `background.rs`.
    `player.rs`, `entities.rs`, `enemies.rs`, `physics.rs` as it grows.
    → verify: level1 still plays the same (converted to v2); loader errors name the line/column.
 
-3. **Level validator (automatic checks)**
+3. **Level validator (automatic checks)** ✅ done (keys/doors; boots and hook join in step 5)
    Coarse movement graph from the physics numbers (walk, fall, jump ≈ 3 tiles up / ~5 across,
    boots and hook when collected). BFS from the start: every key, the door behind it, and the exit
    must be reachable in order; report unreachable gems/secrets as info. Runs in `cargo test`
    over every level, and as `cargo run -- --check <file>`.
    → verify: level1 passes; test levels with a missing jump / walled-off key fail with a clear message.
    This is what lets levels be designed without guesswork (and later: random levels).
+   Implemented as a BFS over standing positions where every step is a short walk/jump script run
+   through the real `Player::update` (`src/validator.rs`), so it follows the physics automatically.
+   Positions are tile-aligned, so a passing level keeps ~1 tile of margin on the longest leaps.
+   Deliberately broken levels live in `levels/test/invalid/` (skipped by the all-levels test).
 
-4. **Keys, doors, switches, crates, secrets, hints**
+4. **Keys, doors, switches, crates, secrets, hints** ✅ done (see the level format below)
    Four key colors + matching doors. Switches that open/close linked walls. Breakable walls
    (secret passages). Shootable crates dropping items (health, points, powerups, sometimes a
    bomb). Hint globes: touch → text in the hint row. Secret areas marked in the level count
    toward the tally.
-   → verify: one test level per feature; validator understands keys and switches.
+   → verify: one test level per feature (`levels/test/keys.txt`, `switch.txt`, `secrets.txt`);
+   validator understands keys and switches.
+   Choices made: a switch fires once when touched and opens the whole connected gate group;
+   crates and cracked walls take one shot and are solid for the validator (a second search with
+   them removed tells "needs breaking" from "unreachable"); a crate's content is fixed per
+   position (50% gem, 30% health, 20% bomb) until powerups exist (step 5); shots fly at the height
+   of the hero's upper body tile, so crates and cracked walls must sit at that height.
 
 5. **Player upgrades + health**
    Health 8 units; items: soda (+1), full meal (+4). Firepower pickups: 1 → 4 bullets on screen,
