@@ -1,5 +1,4 @@
 mod background;
-mod fullscreen;
 mod game;
 mod input;
 mod level;
@@ -40,7 +39,6 @@ impl Terminal {
             use crossterm::event::{KeyboardEnhancementFlags as F, PushKeyboardEnhancementFlags};
             execute!(stdout(), PushKeyboardEnhancementFlags(F::REPORT_EVENT_TYPES | F::DISAMBIGUATE_ESCAPE_CODES))?;
         }
-        fullscreen::enter();
         Ok(Terminal)
     }
 }
@@ -50,7 +48,6 @@ fn restore() {
     let _ = execute!(stdout(), event::PopKeyboardEnhancementFlags);
     let _ = execute!(stdout(), ResetColor, DisableFocusChange, EnableLineWrap, cursor::Show, LeaveAlternateScreen);
     let _ = terminal::disable_raw_mode();
-    fullscreen::leave();
 }
 
 impl Drop for Terminal {

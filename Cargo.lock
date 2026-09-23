@@ -7,7 +7,6 @@ name = "akvisionator"
 version = "0.1.0"
 dependencies = [
  "crossterm",
- "windows-sys",
 ]
 
 [[package]]
